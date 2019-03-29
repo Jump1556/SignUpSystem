@@ -3,11 +3,35 @@ var express = require('express');
 var path = require('path');
 var logger = require('morgan');
 var session = require('express-session');
+var okta = require('@okta/okta-sdk-nodejs');
+var ExpressOIDC = require('@okta/oidc-middleware').ExpressOIDC;
 
 const dashboardRouter = require('./routes/dashboard');
 const publicRouter = require('./routes/public');
+const usersRouter = require('./routes/users');
 
 var app = express();
+
+var oktaClient = new okta.Client({
+  orgUrl: '{}',
+  token: ''
+});
+const oidc = new ExpressOIDC({
+  issuer: '{}/oauth2/default',
+  client_id: '{}',
+  client_secret: '{}',
+  redirect_uri: 'http://localhost:3000/users/callback',
+  scope: 'openid profile',
+  routes: {
+    login: {
+      path: '/users/login'
+    },
+    callback: {
+      path: 'users/callback',
+      defaultRedirect: '/dashboard'
+    }
+  }
+});
 
 // view engine setup
 app.set('views', path.join(__dirname, 'views'));
@@ -18,16 +42,45 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(session({
-  secret: 'LONG_STRING',
+  secret: '',
   resave: true,
   saveUninitialized: false
 }));
+app.use(oidc.router);
 
 app.use('/', publicRouter);
-app.use('/dashboard', dashboardRouter);
+app.use('/dashboard', loginRequired, dashboardRouter);
+app.use('/users', usersRouter);
+
+//to get data about logged user
+app.use((req, res, next) => {
+  if (!req.userinfo) {
+    return next();
+  }
+  oktaClient.getUser(req.userinfo.sub)
+    .then(user => {
+      req.user = user;
+      res.locals.user = user;
+      next();
+    }).catch(err => {
+      next(err);
+    });
+});
+
+app.get('/test', (req, res) => {
+  res.json({ profile: req.user ? req.user.profile : null });
+});
+
+function loginRequired(req, res, next) {
+  if(!req.user) {
+    return res.status(401).render('unauthenticated');
+  }
+  next();
+}
+
 
 //catch 404 and forward to error handler
-app.use(function(req, res, next) {
+app.use((req, res, next) => {
   next(createError(404));
 });
 
